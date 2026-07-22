@@ -1,0 +1,81 @@
+{
+  "_about": "Candidate-claim batch — the contract an investigator writes, then `python scripts/kb.py ingest <file>`. IDs are computed by the script from the assertion triple; never write clm_/src_ ids yourself. Fields marked (required) must be present. Unknown fields (like these _notes) are ignored.",
+
+  "agent_run": {
+    "run_id": "run_investigator_2026-07-21_01",
+    "role": "investigator",
+    "model": "claude-opus-4-8",
+    "task": "Who founded Acme Corp and when?"
+  },
+
+  "sources": [
+    {
+      "alias": "@sec_filing",
+      "uri": "https://sec.gov/acme/S1-2011.pdf",
+      "title": "Acme Corp Form S-1 (2011)",
+      "origin": "SEC",
+      "authority": 0.95,
+      "credibility": "primary regulatory filing",
+      "retrieved_at": "2026-07-21T00:00:00+00:00"
+    },
+    {
+      "alias": "@press",
+      "uri": "https://example-news.com/acme-history",
+      "origin": "Example News",
+      "authority": 0.6
+    }
+  ],
+
+  "claims": [
+    {
+      "alias": "@founding",
+      "_note": "assertion.s/p/o is the machine triple; nl is the human sentence.",
+      "assertion": {
+        "s": "Acme Corp",
+        "p": "founded_in",
+        "o": "2010",
+        "nl": "Acme Corp was founded in 2010."
+      },
+      "grounds": ["S-1 states incorporation date of 2010-03-01"],
+      "warrant": "A company's own SEC registration is authoritative for its incorporation date.",
+      "backing": ["SEC filings are legally attested primary records."],
+      "rebuttal_conditions": [
+        "A prior incorporation record (pre-2010) for the same legal entity is found.",
+        "The S-1 is shown to be amended/withdrawn."
+      ],
+      "likelihood_band": "very_likely",
+      "analytic_confidence": "high",
+      "confidence_score": 0.9,
+      "confidence_method": "source_corroboration",
+      "method": "read primary filing + cross-checked press",
+      "t_valid": null,
+      "t_invalid": null,
+      "evidence": [
+        {"source": "@sec_filing", "quote": "Date of incorporation: March 1, 2010", "locator": "p.12"},
+        {"source": "@press", "quote": "Acme, founded 2010, ...", "locator": "para 2"}
+      ]
+    },
+    {
+      "alias": "@founder_ceo",
+      "_note": "depends_on shows a derived claim: express the parent by @alias (same batch), a {s,p,o} triple, or a known clm_ id.",
+      "assertion": {
+        "s": "Jane Roe",
+        "p": "founded",
+        "o": "Acme Corp",
+        "nl": "Jane Roe founded Acme Corp."
+      },
+      "grounds": ["S-1 lists Jane Roe as sole founder and initial CEO"],
+      "warrant": "The founding filing names the founder directly.",
+      "backing": ["Same primary SEC source as the founding-date claim."],
+      "rebuttal_conditions": ["A co-founder or different founder is documented in an earlier record."],
+      "likelihood_band": "likely",
+      "analytic_confidence": "mod",
+      "confidence_score": 0.75,
+      "confidence_method": "self_consistency",
+      "depends_on": ["@founding"],
+      "evidence": [
+        {"source": "@sec_filing", "quote": "Founder and Chief Executive Officer: Jane Roe", "locator": "p.3"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+# Disposable read-model — always rebuildable from the canonical event log.
+kb/index.db
+kb/index.db-journal
+kb/index.db-wal
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+.mypy_cache/
