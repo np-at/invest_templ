@@ -5,8 +5,12 @@ Two-tier by design:
     object. For FUNCTIONAL predicates this is a genuine contradiction and is
     hard-reported; for multi-valued predicates it is only a *suggestion* (a
     subject can have offices in two cities) — the reconciler agent judges it.
-  - SEMANTIC (the reconciler agent's job): paraphrase / entailment conflicts
-    that exact-match cannot see. stdlib does no embeddings — stated plainly.
+  - SEMANTIC (`detect_semantic` + the reconciler agent): paraphrase conflicts
+    exact-match cannot see. A stdlib LEXICAL prefilter surfaces candidate pairs
+    (shared-vocabulary paraphrase, morphology, reordering); the reconciler makes
+    the final semantic call and links. Disjoint-vocabulary synonymy needs that
+    LLM judgment or the optional `--embed` (model2vec) backend. Detection only
+    SURFACES — it never auto-links (gathering != deciding).
 
 Linking a conflict is mandatory once found: the report's top failure mode is
 *silent resolution*. `conflict_linked` opens a resolution thread and retains
@@ -61,6 +65,106 @@ def detect(topic: str | None = None) -> list[dict]:
                 })
     # contradictions first, unlinked first
     pairs.sort(key=lambda p: (p["already_linked"], not p["functional"]))
+    return pairs
+
+
+def detect_semantic(topic: str | None = None, *, threshold: float | None = None,
+                    backend: str = "lexical") -> list[dict]:
+    """Surface CANDIDATE near-duplicate / near-conflict pairs that exact
+    `detect` misses because subject/predicate differ only on the surface.
+
+    Read-only. Never links: the reconciler agent judges each candidate, then
+    `conflict link`s real conflicts (or recommends `claim supersede` for real
+    duplicates). `backend='lexical'` is stdlib (tier a); `backend='embed'` uses
+    the optional model2vec embeddings (tier c). `threshold` overrides both the
+    subject and predicate bars when given.
+    """
+    from . import similarity as S
+    subj_bar = S.SUBJ_SIM if threshold is None else threshold
+    pred_bar = S.PRED_SIM if threshold is None else threshold
+
+    con = P.build_index(topic)
+    claims = [dict(r) for r in con.execute(
+        "SELECT claim_id, subj, pred, obj, epistemic_status FROM claims")]
+    linked = set()
+    for r in con.execute("SELECT from_id, to_id FROM edges WHERE kind='conflicts_with'"):
+        linked.add(frozenset((r["from_id"], r["to_id"])))
+    # Per-claim source set — the judge needs this to tell INDEPENDENT
+    # attestation (disjoint sources => corroboration, must NOT be superseded)
+    # from same-source RESTATEMENT (redundant => supersede is safe).
+    src_by_claim: dict[str, set] = {}
+    for r in con.execute("SELECT DISTINCT claim_id, source_id FROM evidence"):
+        src_by_claim.setdefault(r["claim_id"], set()).add(r["source_id"])
+    con.close()
+
+    live = [c for c in claims if c["epistemic_status"] in _LIVE]
+
+    if backend == "embed":
+        fields = ([c["subj"] for c in live] + [c["pred"] for c in live]
+                  + [c["obj"] for c in live])
+        vecs = S.embed_texts(fields)
+        def sim(a: str, b: str) -> float:
+            return 1.0 if E.normalize(a) == E.normalize(b) else S.cosine(vecs[a], vecs[b])
+    elif backend == "lexical":
+        sim = S.similarity
+    else:
+        raise SystemExit(f"Unknown backend {backend!r}; use 'lexical' or 'embed'.")
+
+    pairs = []
+    for i in range(len(live)):
+        for j in range(i + 1, len(live)):
+            a, b = live[i], live[j]
+            # skip pairs the EXACT detector already groups (same normalized s+p)
+            if (E.normalize(a["subj"]) == E.normalize(b["subj"])
+                    and E.normalize(a["pred"]) == E.normalize(b["pred"])):
+                continue
+            ssim = sim(a["subj"], b["subj"])
+            if ssim < subj_bar:
+                continue
+            psim = sim(a["pred"], b["pred"])
+            if psim < pred_bar:
+                continue
+            osim = sim(a["obj"], b["obj"])
+            src_a = src_by_claim.get(a["claim_id"], set())
+            src_b = src_by_claim.get(b["claim_id"], set())
+            # The field that decides supersede-vs-keep for a SAME_OBJECT pair.
+            # Three states — never collapse "unknown" into "shared": recommending
+            # supersede on the ABSENCE of evidence cuts against confidence-from-
+            # agreement, so an evidence-less side is called out explicitly.
+            if not src_a or not src_b:
+                source_relation = "unknown"          # a side has no evidence
+            elif src_a & src_b:
+                source_relation = "shared"           # same source => restatement
+            else:
+                source_relation = "independent"      # disjoint => corroboration
+            # NB: `relation`/`severity` describe the STRING relation only, not an
+            # epistemic verdict — the reconciler judges. `same_object` means the
+            # objects match; the differing-object case is a contradiction only
+            # for a FUNCTIONAL (single-valued) predicate (same gate detect uses).
+            if osim >= S.OBJ_DUP_SIM:
+                relation, severity = "same_object", "same_object"
+            else:
+                functional = (E.normalize(a["pred"]) in E.FUNCTIONAL_PREDICATES
+                              or E.normalize(b["pred"]) in E.FUNCTIONAL_PREDICATES)
+                relation = "diff_object"
+                severity = "diff_object_functional" if functional else "diff_object_multivalued"
+            pairs.append({
+                "claim_a": a["claim_id"], "claim_b": b["claim_id"],
+                "subject_a": a["subj"], "subject_b": b["subj"],
+                "predicate_a": a["pred"], "predicate_b": b["pred"],
+                "object_a": a["obj"], "object_b": b["obj"],
+                "subj_sim": round(ssim, 3), "pred_sim": round(psim, 3),
+                "obj_sim": round(osim, 3),
+                "relation": relation, "severity": severity,
+                "sources_a": sorted(src_a), "sources_b": sorted(src_b),
+                "source_relation": source_relation,
+                "already_linked": frozenset((a["claim_id"], b["claim_id"])) in linked,
+            })
+    # unlinked first, functional-contradiction candidates before the rest,
+    # then strongest surface match
+    sev_rank = {"diff_object_functional": 0, "same_object": 1, "diff_object_multivalued": 2}
+    pairs.sort(key=lambda p: (p["already_linked"], sev_rank.get(p["severity"], 3),
+                              -(p["subj_sim"] + p["pred_sim"])))
     return pairs
 
 

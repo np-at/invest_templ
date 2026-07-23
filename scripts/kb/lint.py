@@ -112,5 +112,12 @@ def review_queue(topic: str | None = None) -> list[dict]:
                           "trigger": "authority_contradiction",
                           "detail": f"{pair['subject']} {pair['predicate']}: "
                                     f"{pair['object_a']} vs {pair['object_b']}"})
+
+    # NOTE: semantic (fuzzy) candidates deliberately do NOT enter this queue.
+    # Every trigger here reflects corpus STATE or a recorded decision that the
+    # curator can drain (link, resolve, re-affirm). A rejected fuzzy match has
+    # no "judged, not a conflict" event, so it would reappear forever and break
+    # the drain-the-queue discipline. Fuzzy candidates live on their own,
+    # stateless surface: `kb.py conflict candidates`.
     con.close()
     return items

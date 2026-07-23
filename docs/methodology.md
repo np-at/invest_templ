@@ -32,7 +32,7 @@ These need judgment an LLM supplies, not a deterministic script:
 - **Classify-conflict-type before resolving; multi-perspective retention** — `reconciler.md`, `belief-revision` skill.
 - **Agreement-derived, calibrated confidence** (self-consistency / multi-agent agreement over self-report) — `investigator.md`, `verifier.md`.
 - **Adversarial red-team on high-stakes claims** — `verifier.md`.
-- **Semantic / paraphrase conflict detection** (the tier the script can't do) — `reconciler.md`.
+- **Semantic / paraphrase conflict detection** — the script now runs a stdlib *lexical* prefilter (`conflicts.detect_semantic`, surfaced by `conflict candidates`) that catches shared-vocabulary paraphrase / morphology; the reconciler still supplies the final semantic verdict for disjoint-vocabulary synonymy — `reconciler.md`.
 - **Source-credibility judgment, promotion decisions, minimal (AGM-style) revision** — `curator.md`.
 - **Orchestration, stopping criteria, checkpointing/compaction** — `lead.md`, `investigate` skill.
 
@@ -47,7 +47,8 @@ not implement them as engines:
 - **RDF-star / named graphs / PROV-O / nanopublications** — the standards-based serialization. Our event log + relational projection captures the same statement-level provenance and per-claim metadata; export to RDF-star is a possible adapter, not a dependency.
 - **Graphiti / Zep bi-temporal knowledge graph, Neo4j** — the production substrate the report recommends. We replicate the *semantics* (invalidate-not-delete, four timestamps, as-of queries) in SQLite/JSONL; swapping in Graphiti is the scale path.
 - **Truth-discovery (TruthFinder / CRH)** — unsupervised joint estimation of source reliability and truth. We use a static, human/agent-set `authority` field instead; CRH-style dynamic reweighting is future work.
-- **Wald SPRT debate governor; embedding-based semantic dedup** — compute-optimal stopping and fuzzy matching. Out of scope for a zero-dependency template; noted for teams that add ML deps.
+- **Wald SPRT debate governor** — compute-optimal stopping. Still out of scope for a zero-dependency template; noted for teams that add ML deps.
+- **Embedding-based semantic dedup** — *partially built.* Fuzzy paraphrase/duplicate detection now ships as `conflicts.detect_semantic` (`conflict candidates`): a zero-dependency **lexical** prefilter (word + char-trigram Jaccard) surfaces candidates, the reconciler agent renders the semantic verdict, and an **optional** `--embed` backend (`model2vec`, numpy-tier, no torch) adds true embeddings for teams that opt in. Detection only *surfaces* — linking stays a curator/reconciler decision, and candidates are deliberately kept **out** of the append-only log and the `review-queue`: they are a stateless, recomputed-live view (`conflict candidates`), so a rejected false positive never becomes an un-clearable queue entry. Known limits of that choice, acceptable for advisory scaffolding that writes no events: the thresholds are code constants and the `--embed` weights aren't content-addressed, so *what was surfaced when* is not itself reproducible from the log. A `SAME_OBJECT` pair from **independent** sources is corroboration, not redundancy — the tool flags it so it is consolidated, never superseded. MinHash/LSH blocking is the remaining scale upgrade.
 
 ## A note on citations (carry this forward)
 
