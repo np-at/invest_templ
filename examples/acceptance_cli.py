@@ -71,6 +71,35 @@ BATCH = {
 }
 
 
+# A shared-token paraphrase (same functional predicate, near-identical subject,
+# DIFFERENT object) that exact `conflict detect` cannot group but the lexical
+# `conflict candidates` prefilter surfaces (Bucket 3 / 7b, tier a).
+SEM_BATCH = {
+    "agent_run": {"run_id": "run_acc2", "role": "investigator"},
+    "sources": [{"alias": "@enc", "uri": "https://enc.example/jfk", "authority": 0.9},
+                {"alias": "@atlas", "uri": "https://atlas.example/jfk", "authority": 0.85}],
+    "claims": [
+        {"alias": "@jfk1", "assertion": {"s": "John F. Kennedy", "p": "was_born_in", "o": "Brookline"},
+         "warrant": "encyclopedia", "rebuttal_conditions": ["a primary record shows another city"],
+         "grounds": ["enc entry"], "confidence_score": 0.7, "confidence_method": "source_corroboration",
+         "evidence": [{"source": "@enc", "quote": "born in Brookline", "locator": "k1"}]},
+        {"alias": "@jfk2", "assertion": {"s": "John Kennedy", "p": "was_born_in", "o": "Boston"},
+         "warrant": "blog", "rebuttal_conditions": ["a primary record shows another city"],
+         "grounds": ["blog entry"], "confidence_score": 0.4, "confidence_method": "self_consistency",
+         "evidence": [{"source": "@enc", "quote": "born near Boston", "locator": "k2"}]},
+        # surface-variant subject ("John F Kennedy" — no period) with the SAME
+        # object as @jfk1, cited by an INDEPENDENT source (@atlas). Must classify
+        # as SAME_OBJECT with independent sources => corroboration, NOT a
+        # supersede target. Its normalized subject still differs from @jfk1/@jfk2,
+        # so exact detect (and the silent-resolution lint) never groups it.
+        {"alias": "@jfk3", "assertion": {"s": "John F Kennedy", "p": "was_born_in", "o": "Brookline"},
+         "warrant": "atlas", "rebuttal_conditions": ["a primary record shows another city"],
+         "grounds": ["atlas entry"], "confidence_score": 0.6, "confidence_method": "source_corroboration",
+         "evidence": [{"source": "@atlas", "quote": "b. Brookline", "locator": "k3"}]},
+    ],
+}
+
+
 def main():
     print("== CLI acceptance test ==")
     # clean any prior run
@@ -102,6 +131,37 @@ def main():
 
     rc, out = run("lint")
     check("lint PASSES after linking", rc == 0)
+
+    # --- semantic candidate detection (Bucket 3 / 7b, tier a) ---
+    jfk1 = E.claim_id(TOPIC, "John F. Kennedy", "was_born_in", "Brookline")
+    jfk2 = E.claim_id(TOPIC, "John Kennedy", "was_born_in", "Boston")
+    jfk3 = E.claim_id(TOPIC, "John F Kennedy", "was_born_in", "Brookline")
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump(SEM_BATCH, fh)
+        sem_path = fh.name
+    rc, out = run("ingest", sem_path)
+    check("semantic batch ingested (3 claims)", rc == 0 and "3 new claim" in out)
+
+    rc, out = run("conflict", "detect")
+    check("exact detect is BLIND to the paraphrased pair (different subjects)",
+          "Kennedy" not in out)
+
+    rc, out = run("conflict", "candidates")
+    # assert co-occurrence on the SAME pair-block header line (both claim ids +
+    # the tag together), not just anywhere in the output — otherwise the check
+    # could pass on incidental substrings from unrelated pairs.
+    def pair_line(text, a, b, tag):
+        return any(a in ln and b in ln and tag in ln for ln in text.splitlines())
+    check("candidates surfaces the paraphrased functional conflict (DIFF_OBJECT_FUNCTIONAL)",
+          rc == 0 and pair_line(out, jfk1, jfk2, "DIFF_OBJECT_FUNCTIONAL"))
+    check("candidates surfaces the surface-variant same-object pair (SAME_OBJECT)",
+          pair_line(out, jfk1, jfk3, "SAME_OBJECT"))
+    check("same-object pair with disjoint sources flagged INDEPENDENT (do-not-supersede)",
+          "INDEPENDENT" in out)
+
+    rc, out = run("lint")
+    check("lint STILL passes — semantic candidates are advisory, not gating", rc == 0)
+    Path(sem_path).unlink(missing_ok=True)
 
     rc, out = run("claim", "promote", ceo, "--to", "corroborated")
     check("CEO promoted to corroborated (2 authoritative sources)", rc == 0)

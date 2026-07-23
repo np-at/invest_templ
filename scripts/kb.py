@@ -111,6 +111,32 @@ def cmd_conflict(a):
             link = "linked" if p["already_linked"] else "UNLINKED"
             print(f"  [{tag}/{link}] {p['claim_a']}  vs  {p['claim_b']}")
             print(f"        {p['subject']} — {p['predicate']} — '{p['object_a']}' vs '{p['object_b']}'")
+    elif a.action == "candidates":
+        backend = "embed" if getattr(a, "embed", False) else "lexical"
+        pairs = CF.detect_semantic(topic=a.topic, threshold=a.threshold, backend=backend)
+        if not pairs:
+            print("No semantic candidates above threshold.")
+            return
+        print(f"# Semantic candidates ({backend}) — surface overlap only, NOT a verdict.")
+        print("# The reconciler judges each; scores are neither likelihood nor confidence.")
+        for p in pairs:
+            tag = p["severity"].upper()          # SAME_OBJECT / DIFF_OBJECT_*
+            link = "linked" if p["already_linked"] else "unlinked"
+            print(f"  [{tag}/{link}] {p['claim_a']}  vs  {p['claim_b']}")
+            print(f"        subj~{p['subj_sim']}  '{p['subject_a']}' / '{p['subject_b']}'")
+            print(f"        pred~{p['pred_sim']}  '{p['predicate_a']}' / '{p['predicate_b']}'")
+            print(f"        obj~{p['obj_sim']}   '{p['object_a']}' vs '{p['object_b']}'")
+            if p["relation"] == "same_object":
+                rel = p["source_relation"]
+                if rel == "independent":
+                    print("        sources: INDEPENDENT (disjoint) — corroboration; consolidate "
+                          "(add the other side's evidence to one claim), THEN supersede the "
+                          "redundant one. Never supersede first — evidence is not migrated.")
+                elif rel == "shared":
+                    print("        sources: shared — same source restated; supersede the redundant claim.")
+                else:
+                    print("        sources: UNKNOWN (a side has no evidence) — verify provenance "
+                          "before any supersede.")
     elif a.action == "link":
         _p(CF.link(a.claim_a, a.claim_b, conflict_type=a.type, note=a.note, agent_run=a.run, topic=a.topic))
     elif a.action == "resolve":
@@ -214,6 +240,8 @@ def build_parser():
 
     s = sub.add_parser("conflict"); ss = s.add_subparsers(dest="action", required=True)
     leaf(ss, "detect")
+    cnd = leaf(ss, "candidates"); cnd.add_argument("--threshold", type=float)
+    cnd.add_argument("--embed", action="store_true", help="use optional model2vec embeddings")
     b = leaf(ss, "link"); b.add_argument("claim_a"); b.add_argument("claim_b")
     b.add_argument("--type", default="factual"); b.add_argument("--note")
     b = leaf(ss, "resolve"); b.add_argument("thread"); b.add_argument("status"); b.add_argument("--note")
